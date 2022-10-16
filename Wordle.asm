@@ -1,6 +1,6 @@
 %define BOARD_FILE   'media/board.txt'
 %define HEIGHT       28
-%define WIDTH        51
+%define WIDTH        52
 
 segment .data
     board_file          db  BOARD_FILE, 0
@@ -14,22 +14,25 @@ segment .data
     resMouse            db  "echo '",0x1b,"[?1003l",0x1b,"[?1015l",0x1b,"[?1006l'",0x1b,"[?25h",0
     clear_screen_cmd    db  "clear", 0
 
-    color_normal        db  0x1b, "[0;24m", 0
-    color_unused        db  0x1b, "[47m", 0
-    color_within        db  0x1b, "[43m", 0
-    color_exact         db  0x1b, "[42m", 0
+    color_normal     db  0x1b, "[0;24m", 0
+    fg_unused        db  0x1b, "[38;5;249m", 0, 0,0,0,0
+    fg_within        db  0x1b, "[38;5;3m",0,0,0,0,0,0,0
+    fg_exact         db  0x1b, "[38;5;28m",0,0, 0,0,0,0
+    bg_unused        db  0x1b, "[48;5;249m", 0, 0,0,0,0
+    bg_within        db  0x1b, "[48;5;3m",0,0,0,0,0,0,0
+    bg_exact         db  0x1b, "[48;5;28m",0,0, 0,0,0,0
 
-    box1                dw  __utf32__("▗"), 0, 0
-    box2                dw  __utf32__("▄"), 0, 0
-    box3                dw  __utf32__("▖"), 0, 0
-    box4                dw  __utf32__("▐"), 0, 0
-    box5                dw  __utf32__("█"), 0, 0
-    box6                dw  __utf32__("▌"), 0, 0
-    box7                dw  __utf32__("▝"), 0, 0
-    box8                dw  __utf32__("▀"), 0, 0
-    box9                dw  __utf32__("▘"), 0, 0
-    box10               dw  __utf32__("⮑"), 0, 0
-    box11               dw  __utf32__("⌫"), 0, 0
+    box0                dw  __utf32__("▗"), 0, 0
+    box1                dw  __utf32__("▐"), 0, 0
+    box2                dw  __utf32__("▝"), 0, 0
+    box3                dw  __utf32__("▄"), 0, 0
+    box4                dw  __utf32__("█"), 0, 0
+    box5                dw  __utf32__("▌"), 0, 0
+    box6                dw  __utf32__("▖"), 0, 0
+    box7                dw  __utf32__("▀"), 0, 0
+    box8                dw  __utf32__("▘"), 0, 0
+    box9                dw  __utf32__("⮑"), 0, 0
+    box10               dw  __utf32__("⌫"), 0, 0
 
     frmt_unic           db  "%ls", 0
     frmt_reg            db  "%s", 0
@@ -41,6 +44,9 @@ segment .data
 segment .bss
     board       resb    (HEIGHT*WIDTH)
     userin      resb    4
+    guesses     resb    58
+    guess_stat  resb    58
+    line        resd    1
 
 segment .text
 	global  main
@@ -68,6 +74,8 @@ main:
     enter   0, 0
     pusha
 	; ********** CODE STARTS HERE **********
+
+    mov     BYTE[guess_stat + 4], 1
 
     ; scans in all of the files, sets up unicode, and defaults
     ; prepares the terminal for mouse input
@@ -120,14 +128,15 @@ seed_start:
     lea     esi, [board_file]
     lea     edi, [board]
 
-    ; open the file
+    ; open the board file
     push    mode_r
     push    esi
     call    fopen
     add     esp, 8
     mov     DWORD[ebp-4], eax
-
     mov     DWORD[ebp-8], 0
+
+    ; read the entire board into memory
     read_board:
     cmp     DWORD[ebp-8], HEIGHT
     je      read_board_end
@@ -158,7 +167,11 @@ seed_start:
 render:
     push    ebp
     mov     ebp, esp
-    sub     esp, 12
+    sub     esp, 16
+    ; ebp-4: y counter
+    ; ebp-8: x counter
+    ; ebp-12: y cell counter
+    ; ebp-16: x cell counter
 
     ; clears the command line screen so nothing is left on it
     push    clear_screen_cmd
@@ -167,6 +180,8 @@ render:
 
     ; goes into a double for loop that traverses the entire board array while printing it
     mov     DWORD[ebp-4], 0
+    mov     DWORD[ebp-12], 0
+    mov     DWORD[ebp-16], 0
     y_loop_start:
     cmp     DWORD[ebp-4], HEIGHT
     je      y_loop_end
@@ -182,18 +197,51 @@ render:
             xor     ebx, ebx
             mov     bl, BYTE[board+eax]
 
+            cmp     bl, 60
+            je      color_reset
+
+            cmp     bl, 62
+            jne     test_unicode
+                mov     eax, DWORD[ebp-16]
+                add     DWORD[ebp-12], eax
+                jmp     color_reset
+
+            ; test for trading unicode characters
+            test_unicode:
             cmp     bl, 58
             jg      normal_char
             cmp     bl, 48
             jl      normal_char
+                cmp     bl, 50
+                jg      print_unicode
+                    mov     eax, DWORD[ebp-12]
+                    add     eax, DWORD[ebp-16]
+                    mov     al, BYTE[guess_stat + eax]
+                    shl     eax, 4
+                    lea     eax, [fg_unused + eax]
+
+                    push    eax
+                    call    printf
+                    add     esp, 4
+
+                    inc     DWORD[ebp-16]
+                print_unicode:
+
                 sub     ebx, 48
-                lea     ecx, [box1 + 8*ebx]
+                lea     ecx, [box0 + 8*ebx]
 
                 push    ecx
                 push    frmt_unic
                 call    printf
                 add     esp, 8
                 jmp     x_loop_bottom
+
+            color_reset:
+            lea     eax, [color_normal]
+            push    eax
+            call    printf
+            add     esp, 4
+            jmp     x_loop_bottom
 
             normal_char:
             push    ebx     
@@ -205,6 +253,7 @@ render:
             jmp     x_loop_start
 
         y_loop_bottom:
+        mov     DWORD[ebp-16], 0
         push    0x0a
         call    putchar
         add     esp, 4
