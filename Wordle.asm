@@ -1,11 +1,9 @@
-%define BOARD_FILE   'media/board.txt'
 %define HEIGHT       28
 %define WIDTH        52
 
 segment .data
-    board_file          db  BOARD_FILE, 0
+    board_file          db  "media/board.txt", 0
     mode_r              db  "r", 0
-    mode_w              db  "w", 0
     raw_mode_on_cmd     db  "stty raw -echo", 0
     raw_mode_off_cmd    db  "stty -raw echo", 0
     initSys             db  "stty -echo -icanon", 0 
@@ -15,12 +13,14 @@ segment .data
     clear_screen_cmd    db  "clear", 0
 
     color_normal     db  0x1b, "[0;24m", 0
+    fg_black         db  0x1b, "[30m", 0
     fg_unused        db  0x1b, "[38;5;249m", 0, 0,0,0,0
     fg_within        db  0x1b, "[38;5;3m",0,0,0,0,0,0,0
-    fg_exact         db  0x1b, "[38;5;28m",0,0, 0,0,0,0
+    fg_exact         db  0x1b, "[38;5;34m",0,0, 0,0,0,0
+    bg_default       db  0x1b, "[49m", 0
     bg_unused        db  0x1b, "[48;5;249m", 0, 0,0,0,0
     bg_within        db  0x1b, "[48;5;3m",0,0,0,0,0,0,0
-    bg_exact         db  0x1b, "[48;5;28m",0,0, 0,0,0,0
+    bg_exact         db  0x1b, "[48;5;34m",0,0, 0,0,0,0
 
     box0                dw  __utf32__("▗"), 0, 0
     box1                dw  __utf32__("▐"), 0, 0
@@ -41,10 +41,11 @@ segment .data
     frmt_delim          db  ";", 0
     frmt_Mm             db  "Mm", 0
 
+    guesses             db  "                              qwertyuiopasdfghjkl zxcvbnm"
+
 segment .bss
     board       resb    (HEIGHT*WIDTH)
     userin      resb    4
-    guesses     resb    58
     guess_stat  resb    58
     line        resd    1
 
@@ -54,13 +55,10 @@ segment .text
     extern  putchar
     extern  getchar
     extern  printf
-    extern  scanf
     extern  fopen
     extern  fread
-    extern  fwrite
     extern  fclose
     extern  fgetc
-    extern  fscanf
     extern  setlocale
     extern  malloc
     extern  free
@@ -76,6 +74,7 @@ main:
 	; ********** CODE STARTS HERE **********
 
     mov     BYTE[guess_stat + 4], 1
+    mov     BYTE[guess_stat + 12], 2
 
     ; scans in all of the files, sets up unicode, and defaults
     ; prepares the terminal for mouse input
@@ -83,15 +82,12 @@ main:
     push    0x6
     call    setlocale
     add     esp, 8
-
     push    initSys
     call    system
     add     esp, 4
-
     push    initMouse
     call    system
     add     esp, 4
-
     call    seed_start
 
     game_loop:
@@ -120,15 +116,18 @@ main:
 	ret
 
 ; void seed_start()
+    ; ebp-4: board file pointer
+    ; ebp-8: y counter
 seed_start:
     push    ebp
     mov     ebp, esp
     sub     esp, 8
 
+    ; gets the board file and where to store the board in memory
     lea     esi, [board_file]
     lea     edi, [board]
 
-    ; open the board file
+    ; open the board file to read
     push    mode_r
     push    esi
     call    fopen
@@ -164,14 +163,15 @@ seed_start:
     ret
 
 ; void render()
-render:
-    push    ebp
-    mov     ebp, esp
-    sub     esp, 16
     ; ebp-4: y counter
     ; ebp-8: x counter
     ; ebp-12: y cell counter
     ; ebp-16: x cell counter
+    ; ebp-20: tmp storage
+render:
+    push    ebp
+    mov     ebp, esp
+    sub     esp, 20
 
     ; clears the command line screen so nothing is left on it
     push    clear_screen_cmd
@@ -197,21 +197,66 @@ render:
             xor     ebx, ebx
             mov     bl, BYTE[board+eax]
 
+            ; case where we want to insert a letter
+            cmp     bl, 59
+            jne     test_endings
+                ; get and set the background color for the space
+                mov     eax, DWORD[ebp-12]
+                add     eax, DWORD[ebp-16]
+                mov     al, BYTE[guess_stat + eax - 1]
+                shl     eax, 4
+                mov     DWORD[ebp-20], eax
+                lea     eax, [bg_unused + eax]
+                push    eax
+                call    printf
+                add     esp, 4
+
+                ; make the character appear black
+                push    fg_black
+                call    printf
+                add     esp, 4
+
+                ; grab the corresponding letter guess and print it
+                mov     eax, DWORD[ebp-12]
+                add     eax, DWORD[ebp-16]
+                mov     al, BYTE[guesses + eax - 1]
+                push    eax
+                call    putchar
+                add     esp, 4
+
+                ; restore the box forground color 
+                mov     eax, DWORD[ebp-20]
+                lea     eax, [fg_unused + eax]
+                push    eax
+                call    printf
+                add     esp, 4
+             
+                ; restore the background color to default
+                push    bg_default
+                call    printf
+                add     esp, 4
+            
+                jmp     x_loop_bottom
+
+            ; case to reset the coloring at the end of a line
+            test_endings:
             cmp     bl, 60
             je      color_reset
 
+            ; case to reset and increment to next set of boxes
             cmp     bl, 62
             jne     test_unicode
                 mov     eax, DWORD[ebp-16]
                 add     DWORD[ebp-12], eax
                 jmp     color_reset
 
-            ; test for trading unicode characters
+            ; inserting unicode characters
             test_unicode:
             cmp     bl, 58
             jg      normal_char
             cmp     bl, 48
             jl      normal_char
+                ; if we find the left side of box, update the color scheme
                 cmp     bl, 50
                 jg      print_unicode
                     mov     eax, DWORD[ebp-12]
@@ -225,8 +270,9 @@ render:
                     add     esp, 4
 
                     inc     DWORD[ebp-16]
-                print_unicode:
 
+                ; print the unicode that is substituted for what was found
+                print_unicode:
                 sub     ebx, 48
                 lea     ecx, [box0 + 8*ebx]
 
@@ -236,6 +282,7 @@ render:
                 add     esp, 8
                 jmp     x_loop_bottom
 
+            ; reset the color to normal
             color_reset:
             lea     eax, [color_normal]
             push    eax
@@ -243,15 +290,18 @@ render:
             add     esp, 4
             jmp     x_loop_bottom
 
+            ; print a normal alpha-numeric character
             normal_char:
             push    ebx     
             call    putchar
             add     esp, 4
 
+            ; bottom of x loop, so will go to next x position
             x_loop_bottom:
             inc     DWORD[ebp-8]
             jmp     x_loop_start
 
+        ; goes to the next line of the board and does some cleanup
         y_loop_bottom:
         mov     DWORD[ebp-16], 0
         push    0x0a
@@ -443,6 +493,7 @@ getUserIn:
     mov     esp, ebp
     pop     ebp
     ret
+
 ; void getUserIn2 ()
 getUserIn2:
     push    ebp
