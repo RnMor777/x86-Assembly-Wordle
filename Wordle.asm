@@ -1,8 +1,10 @@
 %define HEIGHT       28
 %define WIDTH        52
+%define NUMB_WORDS   14855
 
 segment .data
     board_file          db  "media/board.txt", 0
+    word_file           db  "media/words.txt", 0
     mode_r              db  "r", 0
     raw_mode_on_cmd     db  "stty raw -echo", 0
     raw_mode_off_cmd    db  "stty -raw echo", 0
@@ -12,15 +14,15 @@ segment .data
     resMouse            db  "echo '",0x1b,"[?1003l",0x1b,"[?1015l",0x1b,"[?1006l'",0x1b,"[?25h",0
     clear_screen_cmd    db  "clear", 0
 
-    color_normal     db  0x1b, "[0;24m", 0
-    fg_black         db  0x1b, "[30m", 0
-    fg_unused        db  0x1b, "[38;5;249m", 0, 0,0,0,0
-    fg_within        db  0x1b, "[38;5;3m",0,0,0,0,0,0,0
-    fg_exact         db  0x1b, "[38;5;34m",0,0, 0,0,0,0
-    bg_default       db  0x1b, "[49m", 0
-    bg_unused        db  0x1b, "[48;5;249m", 0, 0,0,0,0
-    bg_within        db  0x1b, "[48;5;3m",0,0,0,0,0,0,0
-    bg_exact         db  0x1b, "[48;5;34m",0,0, 0,0,0,0
+    color_normal        db  0x1b, "[0;24m", 0
+    fg_black            db  0x1b, "[30m", 0
+    fg_unused           db  0x1b, "[38;5;249m", 0, 0,0,0,0
+    fg_within           db  0x1b, "[38;5;3m",0,0,0,0,0,0,0
+    fg_exact            db  0x1b, "[38;5;34m",0,0, 0,0,0,0
+    bg_default          db  0x1b, "[49m", 0
+    bg_unused           db  0x1b, "[48;5;249m", 0, 0,0,0,0
+    bg_within           db  0x1b, "[48;5;3m",0,0,0,0,0,0,0
+    bg_exact            db  0x1b, "[48;5;34m",0,0, 0,0,0,0
 
     box0                dw  __utf32__("▗"), 0, 0
     box1                dw  __utf32__("▐"), 0, 0
@@ -41,13 +43,15 @@ segment .data
     frmt_delim          db  ";", 0
     frmt_Mm             db  "Mm", 0
 
-    guesses             db  "                              qwertyuiopasdfghjkl zxcvbnm"
+    guesses             db  "                              QWERTYUIOPASDFGHJKL ZXCVBNM"
 
 segment .bss
     board       resb    (HEIGHT*WIDTH)
     userin      resb    4
     guess_stat  resb    58
     line        resd    1
+    position    resd    1
+    read_word   resb    6
 
 segment .text
 	global  main
@@ -58,6 +62,7 @@ segment .text
     extern  fopen
     extern  fread
     extern  fclose
+    extern  fgets
     extern  fgetc
     extern  setlocale
     extern  malloc
@@ -66,6 +71,8 @@ segment .text
     extern  atoi
     extern  fcntl
     extern  usleep
+    extern  toupper
+    extern  strncmp
 
 ; main()
 main:
@@ -95,9 +102,56 @@ main:
         call    getUserIn
 
         mov     al, BYTE[userin]
-        cmp     al, 'q'
+        mov     ebx, DWORD[line]
+        shl     ebx, 2
+        add     ebx, DWORD[line]
+        add     ebx, DWORD[position]
+
+        ; tmp way to leave the game
+        cmp     al, 'Q'
         je      game_end
 
+        ; if enter was pressed then process the word
+        cmp     al, 10
+        jne     back_compare
+            cmp     DWORD[position], 5
+            jne     skip_entry
+                ; Verify valid word
+                lea     ebx, [guesses + ebx - 5]
+                push    ebx
+                call    valid_word
+                add     esp, 4
+
+                cmp     eax, 1
+                jne     skip_entry
+
+                jmp     game_end
+
+                ; Color word
+                inc     DWORD[line]
+                mov     DWORD[position], 0
+                jmp     skip_entry
+
+        ; if backspace was pressed, then delete current char
+        back_compare:
+        cmp     al, 127
+        jne     main_compare
+            cmp     DWORD[position], 0
+            jle     skip_entry
+                mov     BYTE[guesses + ebx - 1], " "
+                dec     DWORD[position]
+                jmp     skip_entry
+            
+        ; enter the newly pressed key if there is room in the word
+        main_compare:
+        cmp     DWORD[position], 5
+        jge     skip_entry
+            mov     BYTE[guesses + ebx], al
+            inc     DWORD[position]
+    
+        skip_entry:
+        cmp     DWORD[line], 6
+        je      game_end
         jmp     game_loop
 
     game_end:
@@ -122,6 +176,10 @@ seed_start:
     push    ebp
     mov     ebp, esp
     sub     esp, 8
+
+    ; set variables
+    mov     DWORD[line], 0
+    mov     DWORD[position], 0
 
     ; gets the board file and where to store the board in memory
     lea     esi, [board_file]
@@ -157,6 +215,68 @@ seed_start:
     inc     DWORD[ebp-8]
     jmp     read_board
     read_board_end:
+
+    push    DWORD[ebp-4]
+    call    fclose
+    add     esp, 4
+
+    mov     esp, ebp
+    pop     ebp
+    ret
+
+; bool valid_word (char *word)
+    ; ebp-4: word file pointer
+    ; ebp-8: counter
+    ; ebp-12: return value
+valid_word:
+    push    ebp,
+    mov     ebp, esp
+    sub     esp, 8
+
+    mov     DWORD[ebp-8], 0
+    mov     DWORD[ebp-12], 0
+
+    ; gets the file pointer to the word list file
+    lea     esi, [word_file]
+
+    ; open the board file to read
+    push    mode_r
+    push    esi
+    call    fopen
+    add     esp, 8
+    mov     DWORD[ebp-4], eax
+
+    ; read the entire board into memory
+    read_words:
+    cmp     DWORD[ebp-8], NUMB_WORDS
+    je      read_words_end
+        push    DWORD[ebp-4]
+        push    6
+        push    read_word
+        call    fgets
+        add     esp, 12
+
+        push    1
+        push    read_word
+        push    DWORD[ebp+8]
+        call    strncmp
+        add     esp, 12
+
+        cmp     eax, 0
+        je      found_word
+
+    inc     DWORD[ebp-8]
+    jmp     read_words
+
+    found_word:
+    mov     DWORD[ebp-12], 1
+    read_words_end:
+
+    push    DWORD[ebp-4]
+    call    fclose
+    add     esp, 4
+
+    mov     eax, DWORD[ebp-12]
 
     mov     esp, ebp
     pop     ebp
@@ -324,7 +444,6 @@ render:
 nonblockgetchar:
     push    ebp
     mov     ebp, esp
-
 	sub		esp, 8
 
 	push	0
@@ -342,8 +461,8 @@ nonblockgetchar:
 	add		esp, 12
 
 	call	getchar
-	mov		DWORD [ebp-8], eax
 
+	mov		DWORD [ebp-8], eax
 	xor		DWORD [ebp-4], 2048
 	push	DWORD [ebp-4]
 	push	4
@@ -358,47 +477,73 @@ nonblockgetchar:
     ret
 
 ; int processgetchar (char* array)
+    ; ebp-4: counter 
+    ; ebp-8: returned non-block get char
 processgetchar:
     push    ebp
     mov     ebp, esp
-
     sub     esp, 8
+
     mov     DWORD[ebp-4], 0
     
     topGetCharLoop:
+    ; get a character
     call    nonblockgetchar
+    push    eax
+    call    toupper
+    add     esp, 4
     mov     DWORD[ebp-8], eax  
 
+    ; decide if a character was returned
     xor     eax, eax
     mov     ebx, DWORD[ebp-8]
     cmp     bl, -1
     je      endGetCharLoop
 
-    mov     ecx, DWORD[ebp+8]
-    mov     edx, DWORD[ebp-4]
-    mov     BYTE[ecx+edx], bl
-    inc     DWORD[ebp-4]
+        cmp     DWORD[ebp-4], 16
+        jl      end_flush
+            mov     DWORD[ebp-4], 0
+        end_flush:
 
-    cmp     bl, 'M'
-    je      returnGetChar
-    cmp     bl, 'a'
-    jl      topGetCharLoop
-    cmp     bl, 'z'
-    jg      topGetCharLoop
-    returnGetChar:
+        mov     ecx, DWORD[ebp+8]
+        mov     edx, DWORD[ebp-4]
+        mov     BYTE[ecx+edx], bl
+        inc     DWORD[ebp-4]
+
+        cmp     bl, 127
+        je      returnGetChar
+        cmp     bl, 10
+        je      returnGetChar
+
+        cmp     bl, 'A'
+        jl      topGetCharLoop
+        cmp     bl, 'Z'
+        jg      topGetCharLoop
+
+        returnGetChar:
         mov     eax, edx
         inc     eax
     endGetCharLoop:
+
     mov     esp, ebp
     pop     ebp
     ret
 
 ; void getUserIn ()
+    ; ebp-4: start of malloc memory
+    ; ebp-8: malloc memory addr + 3
+    ; ebp-12:
+    ; ebp-16: bool mouse return or keyboard
+    ; ebp-20:
+    ; ebp-24:
+    ; ebp-28:
+    ; ebp-32:
 getUserIn:
     push    ebp
     mov     ebp, esp
-
     sub     esp, 32
+
+    ; malloc a space to store the returned memory
     push    17
     call    malloc
     add     esp, 4
@@ -408,12 +553,17 @@ getUserIn:
     add     DWORD[ebp-8], 3
 
     topScanLoop:
+    ; sleep to relax cpu constant usage
     push    500
     call    usleep
     add     esp, 4
+
+    ; store the returned char in the malloc memory
     push    DWORD[ebp-4]
     call    processgetchar
     add     esp, 4
+
+    ; compare return value to mouse or keyboard input
     mov     DWORD[ebp-16], eax
     cmp     eax, 0
     je      topScanLoop
@@ -423,6 +573,7 @@ getUserIn:
         mov     al, BYTE[ebx]
         mov     BYTE[userin], al
         jmp     endScanLoop
+
     processMouse:
     mov     ebx, DWORD[ebp-4]
     xor     ecx, ecx
@@ -486,6 +637,7 @@ getUserIn:
         mov     BYTE[userin], al
         mov     BYTE[userin+2], 0
     endScanLoop:
+
     push    DWORD[ebp-4]
     call    free
     add     esp, 4
@@ -494,102 +646,4 @@ getUserIn:
     pop     ebp
     ret
 
-; void getUserIn2 ()
-getUserIn2:
-    push    ebp
-    mov     ebp, esp
-
-    sub     esp, 32
-    push    17
-    call    malloc
-    add     esp, 4
-
-    mov     DWORD[ebp-4], eax
-    mov     DWORD[ebp-8], eax
-    add     DWORD[ebp-8], 3
-
-    topScanLoop2:
-    push    500
-    call    usleep
-    add     esp, 4
-    mov     BYTE[userin], 0
-    push    DWORD[ebp-4]
-    call    processgetchar
-    add     esp, 4
-    mov     DWORD[ebp-16], eax
-    cmp     eax, 0
-    je      topScanLoop2
-    cmp     eax, 1
-    jne     processMouse2
-        mov     ebx, DWORD[ebp-4]
-        mov     al, BYTE[ebx]
-        mov     BYTE[userin], al
-        jmp     endScanLoop2
-    processMouse2:
-    mov     ebx, DWORD[ebp-4]
-    xor     ecx, ecx
-    mov     cl, BYTE[ebx+eax-1]
-    mov     DWORD[ebp-32], ecx
-
-    push    frmt_delim
-    push    DWORD[ebp-8]
-    call    strtok
-    add     esp, 8
-    push    eax
-    call    atoi
-    add     esp, 4
-    mov     DWORD[ebp-20], eax
-
-    push    frmt_delim
-    push    0
-    call    strtok
-    add     esp, 8
-    push    eax
-    call    atoi
-    add     esp, 4
-    mov     DWORD[ebp-24], eax
-
-    push    frmt_Mm
-    push    0
-    call    strtok
-    add     esp, 8
-    push    eax
-    call    atoi
-    add     esp, 4
-    mov     DWORD[ebp-28], eax
-
-    cmp     DWORD[ebp-28], 9
-    jle     endScanLoop2 
-    cmp     DWORD[ebp-28], 14
-    jge     endScanLoop2
-    cmp     DWORD[ebp-24], 32
-    jl      endScanLoop2
-    cmp     DWORD[ebp-24], 43
-    jg      endScanLoop2
-
-    cmp     DWORD[ebp-20], 0
-    je      clickIntro
-    cmp     DWORD[ebp-20], 35
-    je      hoverIntro
-    jmp     topScanLoop2
-
-    clickIntro:
-    mov     eax, DWORD[ebp-28]
-    sub     eax, 5
-    mov     BYTE[userin], al
-    jmp     endScanLoop2
-
-    hoverIntro:
-    mov     eax, DWORD[ebp-28]
-    sub     eax, 9
-    mov     BYTE[userin], al
-
-    endScanLoop2:
-    push    DWORD[ebp-4]
-    call    free
-    add     esp, 4
-
-    mov     esp, ebp
-    pop     ebp
-    ret
 ; vim:ft=nasm
