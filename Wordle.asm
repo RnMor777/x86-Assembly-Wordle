@@ -1,6 +1,6 @@
 %define HEIGHT       28
 %define WIDTH        52
-%define NUMB_WORDS   14855
+%define NUMB_WORDS   14856
 
 segment .data
     board_file          db  "media/board.txt", 0
@@ -43,7 +43,8 @@ segment .data
     frmt_delim          db  ";", 0
     frmt_Mm             db  "Mm", 0
 
-    guesses             db  "                              QWERTYUIOPASDFGHJKL ZXCVBNM"
+    guesses             db  "                              QWERTYUIOPASDFGHJKL ZXCVBNM", 0
+    chosen_word         db  "SHUSH"
 
 segment .bss
     board       resb    (HEIGHT*WIDTH)
@@ -51,7 +52,8 @@ segment .bss
     guess_stat  resb    58
     line        resd    1
     position    resd    1
-    read_word   resb    6
+    read_word   resb    7
+    ;chosen_word resb    6
 
 segment .text
 	global  main
@@ -80,9 +82,6 @@ main:
     pusha
 	; ********** CODE STARTS HERE **********
 
-    mov     BYTE[guess_stat + 4], 1
-    mov     BYTE[guess_stat + 12], 2
-
     ; scans in all of the files, sets up unicode, and defaults
     ; prepares the terminal for mouse input
     push    frmt_locale
@@ -100,8 +99,16 @@ main:
     game_loop:
         call    render
         call    getUserIn
-
         mov     al, BYTE[userin]
+
+        ;mov     BYTE[guesses], "M"
+        ;mov     BYTE[guesses+1], "A"
+        ;mov     BYTE[guesses+2], "G"
+        ;mov     BYTE[guesses+3], "I"
+        ;mov     BYTE[guesses+4], "C"
+        ;mov     DWORD[position], 5
+        ;mov     al, 10
+
         mov     ebx, DWORD[line]
         shl     ebx, 2
         add     ebx, DWORD[line]
@@ -116,21 +123,36 @@ main:
         jne     back_compare
             cmp     DWORD[position], 5
             jne     skip_entry
-                ; Verify valid word
-                lea     ebx, [guesses + ebx - 5]
+                ; Verify that the input is valid word
+                lea     ecx, [guesses + ebx - 5]
                 push    ebx
+                push    ecx
                 call    valid_word
                 add     esp, 4
+                pop     ebx
 
+                ; invalid word skips to new loop iteration
                 cmp     eax, 1
                 jne     skip_entry
 
-                jmp     game_end
+                    ; Color word and check for winning
+                    sub     ebx, 5
+                    lea     ecx, [guesses + ebx]
+                    push    ebx
+                    push    ecx
+                    call    color_word
+                    add     esp, 8
 
-                ; Color word
-                inc     DWORD[line]
-                mov     DWORD[position], 0
-                jmp     skip_entry
+                    ; increment for next word entered
+                    inc     DWORD[line]
+                    mov     DWORD[position], 0
+
+                    ; if the user won
+                    cmp     eax, 5
+                    je      game_end
+
+                    ; go to next loop
+                    jmp     skip_entry
 
         ; if backspace was pressed, then delete current char
         back_compare:
@@ -155,10 +177,15 @@ main:
         jmp     game_loop
 
     game_end:
+    ; render win screen
+    call    render
+
+    ; reset the system
     push    resSys
     call    system
     add     esp, 4
 
+    ; reset the mouse input
     push    resMouse
     call    system
     add     esp, 4
@@ -231,8 +258,9 @@ seed_start:
 valid_word:
     push    ebp,
     mov     ebp, esp
-    sub     esp, 8
+    sub     esp, 12
 
+    ; set variables
     mov     DWORD[ebp-8], 0
     mov     DWORD[ebp-12], 0
 
@@ -250,19 +278,24 @@ valid_word:
     read_words:
     cmp     DWORD[ebp-8], NUMB_WORDS
     je      read_words_end
+
+        ; read each word from the file
         push    DWORD[ebp-4]
         push    6
-        push    read_word
-        call    fgets
-        add     esp, 12
-
         push    1
+        push    read_word
+        call    fread
+        add     esp, 16
+
+        ; compare the read word to the user entered word
+        push    5
         push    read_word
         push    DWORD[ebp+8]
         call    strncmp
         add     esp, 12
 
-        cmp     eax, 0
+        ; test for match
+        test    eax, eax
         je      found_word
 
     inc     DWORD[ebp-8]
@@ -272,11 +305,108 @@ valid_word:
     mov     DWORD[ebp-12], 1
     read_words_end:
 
+    ; close the file
     push    DWORD[ebp-4]
     call    fclose
     add     esp, 4
 
+    ; return value
     mov     eax, DWORD[ebp-12]
+
+    mov     esp, ebp
+    pop     ebp
+    ret
+
+; int color_word (char *word, int loc)
+    ; ebp-4: the amount of direct matched letters
+color_word:
+    push    ebp
+    mov     ebp, esp
+    sub     esp, 4
+
+    mov     DWORD[ebp-4], 0
+    mov     eax, DWORD[ebp+8]
+    xor     ecx, ecx
+    xor     edx, edx
+    top_color_loop:
+    cmp     ecx, 5
+    je      end_color_loop
+        mov     bl, BYTE[chosen_word + ecx]
+        mov     dl, BYTE[eax + ecx]
+
+        ; test if the characters are a direct match then green
+        cmp     bl, dl
+        jne     test_yellow
+            mov     esi, DWORD[ebp+12]
+            add     esi, ecx
+            mov     BYTE[guess_stat + esi], 2
+            inc     DWORD[ebp-4]
+            jmp     bot_color_loop
+
+        ; test if the colors appear in the string
+        test_yellow:
+        xor     esi, esi
+        xor     edi, edi
+
+        ; determine how many appearances are in the chosen word
+        top_yellow_loop:
+        cmp     edi, 5
+        je      end_yellow_loop
+            mov     bl, BYTE[chosen_word + edi]
+            cmp     bl, dl
+            jne     bot_yellow_loop
+                inc     esi
+        bot_yellow_loop:
+        inc     edi
+        jmp     top_yellow_loop
+        end_yellow_loop:
+        
+        ; determine how many appearances are in the entered word
+        xor     edi, edi
+        top_yellow_loop2:
+        cmp     edi, ecx
+        je      end_yellow_loop2
+            mov     bl, BYTE[eax + edi]
+            cmp     bl, dl
+            jne     bot_yellow_loop2
+                dec     esi
+        bot_yellow_loop2:
+        inc     edi
+        jmp     top_yellow_loop2
+        end_yellow_loop2:
+
+        ; check positions after letter to see if direct match so decrement
+        inc     edi
+        top_yellow_loop3:
+        cmp     edi, 5
+        jge     end_yellow_loop3
+            mov     bl, BYTE[eax + edi]
+            cmp     bl, dl
+            jne     bot_yellow_loop3
+                cmp     BYTE[chosen_word + edi], bl
+                jne     bot_yellow_loop3
+                    dec     esi
+        bot_yellow_loop3:
+        inc     edi
+        jmp     top_yellow_loop3
+        end_yellow_loop3:
+
+        ; if there is room to put yellow then do it
+        cmp     esi, 0
+        jle     color_none
+            mov     esi, DWORD[ebp+12]
+            add     esi, ecx
+            mov     BYTE[guess_stat + esi], 1
+
+        ; nothing gets colored
+        color_none:
+
+    bot_color_loop:
+    inc     ecx
+    jmp     top_color_loop
+    end_color_loop:
+
+    mov     eax, DWORD[ebp-4]
 
     mov     esp, ebp
     pop     ebp
