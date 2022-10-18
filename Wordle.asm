@@ -20,12 +20,12 @@ segment .data
     fg_black            db  0x1b, "[30m", 0
     fg_unused           db  0x1b, "[38;5;249m", 0, 0,0,0,0
     fg_within           db  0x1b, "[38;5;3m",0,0,0,0,0,0,0
-    fg_exact            db  0x1b, "[38;5;34m",0,0, 0,0,0,0
+    fg_exact            db  0x1b, "[38;5;35m",0,0, 0,0,0,0
     fg_fail             db  0x1b, "[38;5;244m", 0, 0,0,0,0
     bg_default          db  0x1b, "[49m", 0
     bg_unused           db  0x1b, "[48;5;249m", 0, 0,0,0,0
     bg_within           db  0x1b, "[48;5;3m",0,0,0,0,0,0,0
-    bg_exact            db  0x1b, "[48;5;34m",0,0, 0,0,0,0
+    bg_exact            db  0x1b, "[48;5;35m",0,0, 0,0,0,0
     bg_fail             db  0x1b, "[48;5;244m", 0, 0,0,0,0
 
     box0                dw  __utf32__("▗"), 0, 0
@@ -47,8 +47,6 @@ segment .data
 
     guesses             db  "                              QWERTYUIOPASDFGHJKL ZXCVBNM", 0
     jump_letter         dd  10, 24, 22, 12, 2, 13, 14, 15, 7, 16, 17, 18, 26, 25, 8, 9, 0, 3, 11, 4, 6, 23, 1, 21, 5, 20
-
-    ;chosen_word         db  "MAGIC"
 
 segment .bss
     board       resb    (HEIGHT*WIDTH)
@@ -82,12 +80,20 @@ segment .text
     extern  srand
     extern  rand
     extern  fseek
+    extern  signal
+    extern  exit
 
 ; main()
 main:
     enter   0, 0
     pusha
 	; ********** CODE STARTS HERE **********
+
+    ; set up ctrl-c handler
+    push    game_end
+    push    0x2
+    call    signal
+    add     esp, 8
 
     ; scans in all of the files, sets up unicode, and defaults
     ; prepares the terminal for mouse input
@@ -108,22 +114,10 @@ main:
         call    getUserIn
         mov     al, BYTE[userin]
 
-        ;mov     BYTE[guesses], "M"
-        ;mov     BYTE[guesses+1], "A"
-        ;mov     BYTE[guesses+2], "G"
-        ;mov     BYTE[guesses+3], "I"
-        ;mov     BYTE[guesses+4], "C"
-        ;mov     DWORD[position], 5
-        ;mov     al, 10
-
         mov     ebx, DWORD[line]
         shl     ebx, 2
         add     ebx, DWORD[line]
         add     ebx, DWORD[position]
-
-        ; tmp way to leave the game
-        cmp     al, 'Q'
-        je      game_end
 
         ; if enter was pressed then process the word
         cmp     al, 10
@@ -197,6 +191,9 @@ main:
     call    system
     add     esp, 4
 
+    ; exits
+    call    exit
+
 	; *********** CODE ENDS HERE ***********
     popa
     mov     eax, 0
@@ -235,6 +232,7 @@ seed_start:
         mul     DWORD [ebp-8]
         lea     ebx, [edi+eax] 
 
+        ; read the row of characters
         push    DWORD[ebp-4]
         push    WIDTH
         push    1
@@ -242,6 +240,7 @@ seed_start:
         call    fread
         add     esp, 16
 
+        ; clean up the \n character
         push    DWORD[ebp-4]
         call    fgetc
         add     esp, 4
@@ -698,7 +697,7 @@ processgetchar:
     mov     DWORD[ebp-4], 0
     
     topGetCharLoop:
-    ; get a character
+    ; get a character and cast to upper case if applicable
     call    nonblockgetchar
     push    eax
     call    toupper
@@ -711,21 +710,18 @@ processgetchar:
     cmp     bl, -1
     je      endGetCharLoop
 
-        cmp     DWORD[ebp-4], 16
-        jl      end_flush
-            mov     DWORD[ebp-4], 0
-        end_flush:
-
         mov     ecx, DWORD[ebp+8]
         mov     edx, DWORD[ebp-4]
         mov     BYTE[ecx+edx], bl
         inc     DWORD[ebp-4]
 
+        ; special input that will allowed to be handled
         cmp     bl, 127
         je      returnGetChar
         cmp     bl, 10
         je      returnGetChar
 
+        ; otherwise we are looking for a capital letter
         cmp     bl, 'A'
         jl      topGetCharLoop
         cmp     bl, 'Z'
