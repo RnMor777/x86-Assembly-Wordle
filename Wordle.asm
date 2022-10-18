@@ -19,10 +19,12 @@ segment .data
     fg_unused           db  0x1b, "[38;5;249m", 0, 0,0,0,0
     fg_within           db  0x1b, "[38;5;3m",0,0,0,0,0,0,0
     fg_exact            db  0x1b, "[38;5;34m",0,0, 0,0,0,0
+    fg_fail             db  0x1b, "[38;5;244m", 0, 0,0,0,0
     bg_default          db  0x1b, "[49m", 0
     bg_unused           db  0x1b, "[48;5;249m", 0, 0,0,0,0
     bg_within           db  0x1b, "[48;5;3m",0,0,0,0,0,0,0
     bg_exact            db  0x1b, "[48;5;34m",0,0, 0,0,0,0
+    bg_fail             db  0x1b, "[48;5;244m", 0, 0,0,0,0
 
     box0                dw  __utf32__("▗"), 0, 0
     box1                dw  __utf32__("▐"), 0, 0
@@ -44,12 +46,13 @@ segment .data
     frmt_Mm             db  "Mm", 0
 
     guesses             db  "                              QWERTYUIOPASDFGHJKL ZXCVBNM", 0
-    chosen_word         db  "SHUSH"
+    chosen_word         db  "MAGIC"
+    jump_letter         dd  10, 24, 22, 12, 2, 13, 14, 15, 7, 16, 17, 18, 26, 25, 8, 9, 0, 3, 11, 4, 6, 23, 1, 21, 5, 20
 
 segment .bss
     board       resb    (HEIGHT*WIDTH)
     userin      resb    4
-    guess_stat  resb    58
+    guess_stat  resb    59
     line        resd    1
     position    resd    1
     read_word   resb    7
@@ -337,10 +340,18 @@ color_word:
         ; test if the characters are a direct match then green
         cmp     bl, dl
         jne     test_yellow
+            ; color the letter in the entered word
             mov     esi, DWORD[ebp+12]
             add     esi, ecx
             mov     BYTE[guess_stat + esi], 2
             inc     DWORD[ebp-4]
+
+            ; color the letter in the keyboard
+            lea     esi, [guess_stat+30]
+            sub     dl, 'A'
+            add     esi, DWORD[jump_letter + 4*edx]
+            mov     BYTE[esi], 2
+
             jmp     bot_color_loop
 
         ; test if the colors appear in the string
@@ -394,12 +405,32 @@ color_word:
         ; if there is room to put yellow then do it
         cmp     esi, 0
         jle     color_none
+            ; color the word letter yellow
             mov     esi, DWORD[ebp+12]
             add     esi, ecx
             mov     BYTE[guess_stat + esi], 1
 
+            ; color the keyboard yellow
+            lea     esi, [guess_stat+30]
+            sub     dl, 'A'
+            add     esi, DWORD[jump_letter + 4*edx]
+            cmp     BYTE[esi], 0
+            jne     bot_color_loop
+                mov     BYTE[esi], 1
+                jmp     bot_color_loop
+
         ; nothing gets colored
         color_none:
+            ; color the word letter dark grey
+            mov     esi, DWORD[ebp+12]
+            add     esi, ecx
+            mov     BYTE[guess_stat + esi], 3
+
+            ; color the keyboard dark grey
+            lea     esi, [guess_stat+30]
+            sub     dl, 'A'
+            add     esi, DWORD[jump_letter + 4*edx]
+            mov     BYTE[esi], 3
 
     bot_color_loop:
     inc     ecx
