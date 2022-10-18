@@ -1,10 +1,12 @@
 %define HEIGHT       28
 %define WIDTH        52
 %define NUMB_WORDS   14856
+%define MAX_RAND     2315
 
 segment .data
     board_file          db  "media/board.txt", 0
     word_file           db  "media/words.txt", 0
+    bank_file           db  "media/bank.txt", 0
     mode_r              db  "r", 0
     raw_mode_on_cmd     db  "stty raw -echo", 0
     raw_mode_off_cmd    db  "stty -raw echo", 0
@@ -39,15 +41,14 @@ segment .data
     box10               dw  __utf32__("⌫"), 0, 0
 
     frmt_unic           db  "%ls", 0
-    frmt_reg            db  "%s", 0
-    newline             db  10, 0
     frmt_locale         db  "", 0
     frmt_delim          db  ";", 0
     frmt_Mm             db  "Mm", 0
 
     guesses             db  "                              QWERTYUIOPASDFGHJKL ZXCVBNM", 0
-    chosen_word         db  "MAGIC"
     jump_letter         dd  10, 24, 22, 12, 2, 13, 14, 15, 7, 16, 17, 18, 26, 25, 8, 9, 0, 3, 11, 4, 6, 23, 1, 21, 5, 20
+
+    ;chosen_word         db  "MAGIC"
 
 segment .bss
     board       resb    (HEIGHT*WIDTH)
@@ -56,7 +57,7 @@ segment .bss
     line        resd    1
     position    resd    1
     read_word   resb    7
-    ;chosen_word resb    6
+    chosen_word resb    6
 
 segment .text
 	global  main
@@ -67,7 +68,6 @@ segment .text
     extern  fopen
     extern  fread
     extern  fclose
-    extern  fgets
     extern  fgetc
     extern  setlocale
     extern  malloc
@@ -78,6 +78,10 @@ segment .text
     extern  usleep
     extern  toupper
     extern  strncmp
+    extern  time
+    extern  srand
+    extern  rand
+    extern  fseek
 
 ; main()
 main:
@@ -217,7 +221,7 @@ seed_start:
 
     ; open the board file to read
     push    mode_r
-    push    esi
+    push    board_file 
     call    fopen
     add     esp, 8
     mov     DWORD[ebp-4], eax
@@ -246,6 +250,52 @@ seed_start:
     jmp     read_board
     read_board_end:
 
+    ; close the file
+    push    DWORD[ebp-4]
+    call    fclose
+    add     esp, 4
+
+    ; generate a random number to find the word used
+    ; srand(time(null))
+    push    0
+    call    time
+    add     esp, 4
+    push    eax
+    call    srand
+    add     esp, 4
+
+    ; open possible word choices file
+    push    mode_r
+    push    bank_file 
+    call    fopen
+    add     esp, 8
+    mov     DWORD[ebp-4], eax
+
+    ; generate random number 0 < x < # of words
+    call    rand
+    cdq
+    mov     ebx, MAX_RAND
+    div     ebx
+    lea     ecx, [edx*4 + edx]
+    add     ecx, edx
+
+    ; jump to that word in the file
+    push    0
+    push    ecx 
+    push    DWORD[ebp-4]
+    call    fseek
+    add     esp, 12
+
+    ; read the word and store as chosen_word
+    push    DWORD[ebp-4]
+    push    6
+    push    1
+    push    chosen_word
+    call    fread
+    add     esp, 16
+    mov     BYTE[chosen_word + 5], 0
+
+    ; close the file
     push    DWORD[ebp-4]
     call    fclose
     add     esp, 4
