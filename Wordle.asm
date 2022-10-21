@@ -18,15 +18,15 @@ segment .data
 
     color_normal        db  0x1b, "[0;24m", 0
     fg_black            db  0x1b, "[30m", 0
-    fg_unused           db  0x1b, "[38;5;249m", 0, 0,0,0,0
+    fg_unused           db  0x1b, "[38;5;250m", 0, 0,0,0,0
     fg_within           db  0x1b, "[38;5;3m",0,0,0,0,0,0,0
     fg_exact            db  0x1b, "[38;5;35m",0,0, 0,0,0,0
-    fg_fail             db  0x1b, "[38;5;244m", 0, 0,0,0,0
+    fg_fail             db  0x1b, "[38;5;243m", 0, 0,0,0,0
     bg_default          db  0x1b, "[49m", 0
-    bg_unused           db  0x1b, "[48;5;249m", 0, 0,0,0,0
+    bg_unused           db  0x1b, "[48;5;250m", 0, 0,0,0,0
     bg_within           db  0x1b, "[48;5;3m",0,0,0,0,0,0,0
     bg_exact            db  0x1b, "[48;5;35m",0,0, 0,0,0,0
-    bg_fail             db  0x1b, "[48;5;244m", 0, 0,0,0,0
+    bg_fail             db  0x1b, "[48;5;243m", 0, 0,0,0,0
 
     box0                dw  __utf32__("▗"), 0, 0
     box1                dw  __utf32__("▐"), 0, 0
@@ -41,12 +41,18 @@ segment .data
     box10               dw  __utf32__("⌫"), 0, 0
 
     frmt_unic           db  "%ls", 0
+    frmt_unic2          db  0x1b,"[48;5;250m",0x1b,"[30m"," %ls ", 0x1b, "[49m", 0x1b, "[38;5;250m", 0
     frmt_locale         db  "", 0
     frmt_delim          db  ";", 0
     frmt_Mm             db  "Mm", 0
 
     guesses             db  "                              QWERTYUIOPASDFGHJKL ZXCVBNM", 0
     jump_letter         dd  10, 24, 22, 12, 2, 13, 14, 15, 7, 16, 17, 18, 26, 25, 8, 9, 0, 3, 11, 4, 6, 23, 1, 21, 5, 20
+
+    lose_text           db  " Unfortunate! The word was: %s. Again (y/n)?", 0
+    win_text            db  "Congratulations! You found: %s. Again (y/n)?", 0
+    error_text          db  "              Not in the wordlist", 0
+    text_array          dd  lose_text, win_text, error_text
 
 segment .bss
     board       resb    (HEIGHT*WIDTH)
@@ -56,6 +62,7 @@ segment .bss
     position    resd    1
     read_word   resb    7
     chosen_word resb    6
+    error_tag   resd    1
 
 segment .text
 	global  main
@@ -89,30 +96,18 @@ main:
     pusha
 	; ********** CODE STARTS HERE **********
 
-    ; set up ctrl-c handler
-    push    game_end
-    push    0x2
-    call    signal
-    add     esp, 8
-
-    ; scans in all of the files, sets up unicode, and defaults
-    ; prepares the terminal for mouse input
-    push    frmt_locale
-    push    0x6
-    call    setlocale
-    add     esp, 8
-    push    initSys
-    call    system
-    add     esp, 4
-    push    initMouse
-    call    system
-    add     esp, 4
+    ; format all game setup things
     call    seed_start
+
+    ; reset variables and everything to defaults
+    game_start:
+    call    restart_game
 
     game_loop:
         call    render
         call    getUserIn
         mov     al, BYTE[userin]
+        mov     DWORD[error_tag], 0
 
         mov     ebx, DWORD[line]
         shl     ebx, 2
@@ -132,11 +127,15 @@ main:
                 add     esp, 4
                 pop     ebx
 
-                ; invalid word skips to new loop iteration
+                ; test if the response was a valid word
                 cmp     eax, 1
-                jne     skip_entry
+                je      correct_word
+                    ; if invalid we through error message and continue loop
+                    mov     DWORD[error_tag], 3
+                    jmp     skip_entry
 
-                    ; Color word and check for winning
+                    correct_word:
+                    ; if valid, color word and check for winning
                     sub     ebx, 5
                     lea     ecx, [guesses + ebx]
                     push    ebx
@@ -150,7 +149,7 @@ main:
 
                     ; if the user won
                     cmp     eax, 5
-                    je      game_end
+                    je      game_win
 
                     ; go to next loop
                     jmp     skip_entry
@@ -172,26 +171,35 @@ main:
             mov     BYTE[guesses + ebx], al
             inc     DWORD[position]
     
-        skip_entry:
-        cmp     DWORD[line], 6
-        je      game_end
-        jmp     game_loop
+    skip_entry:
+    cmp     DWORD[line], 6
+    jne     game_loop
+
+    ; if the player lost
+    mov     DWORD[error_tag], 1
+    jmp     game_end
+
+    ; if the player won
+    game_win:
+    mov     DWORD[error_tag], 2
 
     game_end:
-    ; render win screen
     call    render
 
-    ; reset the system
+    ; if the user wants to play another round
+    call    getUserIn
+    mov     al, BYTE[userin]
+    cmp     al, "Y"
+    je      game_start
+
+    game_quit:
     push    resSys
     call    system
     add     esp, 4
-
-    ; reset the mouse input
     push    resMouse
     call    system
     add     esp, 4
 
-    ; exits
     call    exit
 
 	; *********** CODE ENDS HERE ***********
@@ -208,9 +216,23 @@ seed_start:
     mov     ebp, esp
     sub     esp, 8
 
-    ; set variables
-    mov     DWORD[line], 0
-    mov     DWORD[position], 0
+    ; set up ctrl-c handler
+    push    game_quit
+    push    0x2
+    call    signal
+    add     esp, 8
+
+    ; sets up unicode, prepares the terminal for mouse input
+    push    frmt_locale
+    push    0x6
+    call    setlocale
+    add     esp, 8
+    push    initSys
+    call    system
+    add     esp, 4
+    push    initMouse
+    call    system
+    add     esp, 4
 
     ; gets the board file and where to store the board in memory
     lea     esi, [board_file]
@@ -262,6 +284,41 @@ seed_start:
     push    eax
     call    srand
     add     esp, 4
+
+    mov     esp, ebp
+    pop     ebp
+    ret
+
+; void restart_game ()
+restart_game:
+    push    ebp
+    mov     ebp, esp
+    sub     esp, 4
+
+    ; set variables
+    mov     DWORD[line], 0
+    mov     DWORD[position], 0
+    mov     DWORD[error_tag], 0
+
+    ; reset all guesses
+    xor     ecx, ecx
+    top_reset_loop1:
+    cmp     ecx, 30
+    je      end_reset_loop1
+        mov BYTE[guesses + ecx], " "
+    inc     ecx
+    jmp     top_reset_loop1
+    end_reset_loop1:
+
+    ; reset all guess stats
+    xor     ecx, ecx
+    top_reset_loop2:
+    cmp     ecx, 59
+    je      end_reset_loop2
+        mov BYTE[guess_stat + ecx], 0
+    inc     ecx
+    jmp     top_reset_loop2
+    end_reset_loop2:
 
     ; open possible word choices file
     push    mode_r
@@ -573,16 +630,55 @@ render:
             cmp     bl, 60
             je      color_reset
 
+            ; case to print messages if they exist
+            cmp     bl, 61
+            jne     test_reset
+            mov     eax, DWORD[error_tag]
+            cmp     eax, 0
+            je      y_loop_bottom
+                dec     eax
+                mov     eax, [text_array + 4*eax]
+                push    chosen_word
+                push    eax
+                call    printf
+                add     esp, 8
+                jmp     y_loop_bottom
+
             ; case to reset and increment to next set of boxes
+            test_reset:
             cmp     bl, 62
-            jne     test_unicode
+            jne     test_enter
                 mov     eax, DWORD[ebp-16]
                 add     DWORD[ebp-12], eax
                 jmp     color_reset
 
+            ; test for enter symbol to print properly
+            test_enter:
+            cmp     bl, 57
+            jne     test_backspace
+                push    box9
+                push    frmt_unic2
+                call    printf 
+                add     esp, 4
+
+                add     DWORD[ebp-8], 2
+                jmp     x_loop_bottom
+
+            ; test for the backspace symbol and print properly
+            test_backspace:
+            cmp     bl, 58
+            jne     test_unicode
+                push    box10
+                push    frmt_unic2
+                call    printf 
+                add     esp, 4
+
+                add     DWORD[ebp-8], 2
+                jmp     x_loop_bottom
+
             ; inserting unicode characters
             test_unicode:
-            cmp     bl, 58
+            cmp     bl, 56
             jg      normal_char
             cmp     bl, 48
             jl      normal_char
@@ -782,67 +878,7 @@ getUserIn:
         jmp     endScanLoop
 
     processMouse:
-    mov     ebx, DWORD[ebp-4]
-    xor     ecx, ecx
-    mov     cl, BYTE[ebx+eax-1]
-    mov     DWORD[ebp-32], ecx
-
-    push    frmt_delim
-    push    DWORD[ebp-8]
-    call    strtok
-    add     esp, 8
-    push    eax
-    call    atoi
-    add     esp, 4
-    mov     DWORD[ebp-20], eax
-
-    push    frmt_delim
-    push    0
-    call    strtok
-    add     esp, 8
-    push    eax
-    call    atoi
-    add     esp, 4
-    mov     DWORD[ebp-24], eax
-
-    push    frmt_Mm
-    push    0
-    call    strtok
-    add     esp, 8
-    push    eax
-    call    atoi
-    add     esp, 4
-    mov     DWORD[ebp-28], eax
-
-    cmp     DWORD[ebp-20], 2
-    jne     contMouseIf
-        mov     BYTE[userin], 'z'
-        jmp     endScanLoop
-    contMouseIf:
-    cmp     DWORD[ebp-20], 0
-    jne     topScanLoop
-    cmp     DWORD[ebp-32], "M"
-    jne     topScanLoop
-    cmp     DWORD[ebp-24], 21
-    jl      topScanLoop
-    cmp     DWORD[ebp-24], 36
-    jg      topScanLoop
-    cmp     DWORD[ebp-28], 5
-    jl      topScanLoop
-    cmp     DWORD[ebp-28], 12
-    jg      topScanLoop
-        mov     eax, DWORD[ebp-28]
-        sub     eax, 5
-        mov     ebx, 8
-        sub     ebx, eax
-        add     ebx, "0"
-        mov     BYTE[userin+1], bl
-        mov     eax, DWORD[ebp-24]
-        sub     eax, 21
-        shr     eax, 1
-        add     eax, "a"
-        mov     BYTE[userin], al
-        mov     BYTE[userin+2], 0
+    jmp     topScanLoop
     endScanLoop:
 
     push    DWORD[ebp-4]
