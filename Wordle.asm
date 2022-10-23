@@ -397,25 +397,33 @@ restart_game:
     ret
 
 ; bool valid_word (char *word)
-    ; ebp-4: counter
-    ; ebp-8: return value
+    ; ebp-4: start
+    ; ebp-8: mid
+    ; ebp-12: end
+    ; ebp-16: return value
 valid_word:
     push    ebp,
     mov     ebp, esp
-    sub     esp, 8
+    sub     esp, 16
 
     ; set variables
     mov     DWORD[ebp-4], 0
-    mov     DWORD[ebp-8], 0
+    mov     DWORD[ebp-12], NUMB_WORDS
+    mov     DWORD[ebp-16], 0
 
-    ; read the entire board into memory
+    ; runs a binary search to find if the word is valid
     read_words:
-    cmp     DWORD[ebp-4], NUMB_WORDS
+    mov     eax, DWORD[ebp-4]
+    cmp     eax, DWORD[ebp-12]
     je      read_words_end
+        ; calculate mid
+        add     eax, DWORD[ebp-12]
+        shr     eax, 1
+        mov     DWORD[ebp-8], eax
 
-        ; load the scanned word
-        mov     eax, 6
-        mul     DWORD[ebp-4]
+        ; load arr[mid]
+        mov     ebx, 6
+        mul     ebx
         lea     eax, [word_list + eax]
         
         ; compare the read word to the user entered word
@@ -429,15 +437,26 @@ valid_word:
         test    eax, eax
         je      found_word
 
-    inc     DWORD[ebp-4]
+        ; update the start or end values
+        mov     edx, DWORD[ebp-8]
+        mov     ebx, -4
+        mov     ecx, -12
+        cmp     eax, 0
+        cmovl   ebx, ecx
+        mov     DWORD[ebp + ebx], edx
+
+        ; add 1 if less than
+        shr     eax, 31
+        xor     eax, 1
+        add     DWORD[ebp + ebx], eax
     jmp     read_words
 
     found_word:
-    mov     DWORD[ebp-8], 1
+    mov     DWORD[ebp-16], 1
     read_words_end:
 
     ; return value
-    mov     eax, DWORD[ebp-8]
+    mov     eax, DWORD[ebp-16]
 
     mov     esp, ebp
     pop     ebp
