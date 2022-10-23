@@ -56,6 +56,7 @@ segment .data
 
 segment .bss
     board       resb    (HEIGHT*WIDTH)
+    word_list   resb    (NUMB_WORDS * 6 + 1)
     userin      resb    4
     guess_stat  resb    59
     line        resd    1
@@ -234,10 +235,6 @@ seed_start:
     call    system
     add     esp, 4
 
-    ; gets the board file and where to store the board in memory
-    lea     esi, [board_file]
-    lea     edi, [board]
-
     ; open the board file to read
     push    mode_r
     push    board_file 
@@ -250,9 +247,10 @@ seed_start:
     read_board:
     cmp     DWORD[ebp-8], HEIGHT
     je      read_board_end
+        ; load the proper spot to store values
         mov     eax, WIDTH
         mul     DWORD [ebp-8]
-        lea     ebx, [edi+eax] 
+        lea     ebx, [board+eax] 
 
         ; read the row of characters
         push    DWORD[ebp-4]
@@ -270,6 +268,44 @@ seed_start:
     inc     DWORD[ebp-8]
     jmp     read_board
     read_board_end:
+
+    ; close the file
+    push    DWORD[ebp-4]
+    call    fclose
+    add     esp, 4
+
+    ; open the valid word file to read
+    push    mode_r
+    push    word_file
+    call    fopen
+    add     esp, 8
+    mov     DWORD[ebp-4], eax
+
+    ; read the entire wordlist into memory
+    mov     DWORD[ebp-8], 0
+    read_wordlist:
+    cmp     DWORD[ebp-8], NUMB_WORDS
+    je      read_wordlist_end
+        ; load up the spot to store the word
+        mov     eax, 6
+        mul     DWORD [ebp-8]
+        lea     ebx, [word_list+eax] 
+
+        ; read the word
+        push    DWORD[ebp-4]
+        push    6
+        push    1
+        push    ebx
+        call    fread
+        add     esp, 16
+    inc     DWORD[ebp-8]
+    jmp     read_wordlist
+    read_wordlist_end:
+
+    mov     eax, 6
+    mov     ebx, NUMB_WORDS
+    mul     ebx
+    mov     BYTE[word_list + eax + 1], 0
 
     ; close the file
     push    DWORD[ebp-4]
@@ -361,44 +397,30 @@ restart_game:
     ret
 
 ; bool valid_word (char *word)
-    ; ebp-4: word file pointer
-    ; ebp-8: counter
-    ; ebp-12: return value
+    ; ebp-4: counter
+    ; ebp-8: return value
 valid_word:
     push    ebp,
     mov     ebp, esp
-    sub     esp, 12
+    sub     esp, 8
 
     ; set variables
+    mov     DWORD[ebp-4], 0
     mov     DWORD[ebp-8], 0
-    mov     DWORD[ebp-12], 0
-
-    ; gets the file pointer to the word list file
-    lea     esi, [word_file]
-
-    ; open the board file to read
-    push    mode_r
-    push    esi
-    call    fopen
-    add     esp, 8
-    mov     DWORD[ebp-4], eax
 
     ; read the entire board into memory
     read_words:
-    cmp     DWORD[ebp-8], NUMB_WORDS
+    cmp     DWORD[ebp-4], NUMB_WORDS
     je      read_words_end
 
-        ; read each word from the file
-        push    DWORD[ebp-4]
-        push    6
-        push    1
-        push    read_word
-        call    fread
-        add     esp, 16
-
+        ; load the scanned word
+        mov     eax, 6
+        mul     DWORD[ebp-4]
+        lea     eax, [word_list + eax]
+        
         ; compare the read word to the user entered word
         push    5
-        push    read_word
+        push    eax
         push    DWORD[ebp+8]
         call    strncmp
         add     esp, 12
@@ -407,20 +429,15 @@ valid_word:
         test    eax, eax
         je      found_word
 
-    inc     DWORD[ebp-8]
+    inc     DWORD[ebp-4]
     jmp     read_words
 
     found_word:
-    mov     DWORD[ebp-12], 1
+    mov     DWORD[ebp-8], 1
     read_words_end:
 
-    ; close the file
-    push    DWORD[ebp-4]
-    call    fclose
-    add     esp, 4
-
     ; return value
-    mov     eax, DWORD[ebp-12]
+    mov     eax, DWORD[ebp-8]
 
     mov     esp, ebp
     pop     ebp
