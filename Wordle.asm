@@ -54,6 +54,11 @@ segment .data
     error_text          db  "              Not in the wordlist", 0
     text_array          dd  lose_text, win_text, error_text
 
+    mouse_map           db  "QQQQQWWWWWEEEEERRRRRTTTTTYYYYYUUUUUIIIIIOOOOOPPPPP"
+    mouse_map2          db  "   AAAAASSSSSDDDDDFFFFFGGGGGHHHHHJJJJJKKKKKLLLLL  " 
+    mouse_map3          db  "   11111ZZZZZXXXXXCCCCCVVVVVBBBBBNNNNNMMMMM22222  "
+    mouse_array         dd  mouse_map, mouse_map2, mouse_map3
+
 segment .bss
     board       resb    (HEIGHT*WIDTH)
     word_list   resb    (NUMB_WORDS * 6 + 1)
@@ -64,6 +69,7 @@ segment .bss
     read_word   resb    7
     chosen_word resb    6
     error_tag   resd    1
+    block_mouse resd    1
 
 segment .text
 	global  main
@@ -820,11 +826,10 @@ nonblockgetchar:
 
 ; int processgetchar (char* array)
     ; ebp-4: counter 
-    ; ebp-8: returned non-block get char
 processgetchar:
     push    ebp
     mov     ebp, esp
-    sub     esp, 8
+    sub     esp, 4
 
     mov     DWORD[ebp-4], 0
     
@@ -834,11 +839,10 @@ processgetchar:
     push    eax
     call    toupper
     add     esp, 4
-    mov     DWORD[ebp-8], eax  
 
     ; decide if a character was returned
+    mov     ebx, eax
     xor     eax, eax
-    mov     ebx, DWORD[ebp-8]
     cmp     bl, -1
     je      endGetCharLoop
 
@@ -873,14 +877,13 @@ processgetchar:
     ; ebp-8: malloc memory addr + 3
     ; ebp-12:
     ; ebp-16: bool mouse return or keyboard
-    ; ebp-20:
-    ; ebp-24:
-    ; ebp-28:
-    ; ebp-32:
+    ; ebp-20: mouse op-code
+    ; ebp-24: column
+    ; ebp-28: row
 getUserIn:
     push    ebp
     mov     ebp, esp
-    sub     esp, 32
+    sub     esp, 28
 
     ; malloc a space to store the returned memory
     push    17
@@ -913,10 +916,75 @@ getUserIn:
         mov     BYTE[userin], al
         jmp     endScanLoop
 
+    ; if the user did anything with the mouse
     processMouse:
-    jmp     topScanLoop
+    ; store the opcode related to the mouse event in ebp-20
+    push    frmt_delim
+    push    DWORD[ebp-8]
+    call    strtok
+    add     esp, 8
+    push    eax
+    call    atoi
+    add     esp, 4
+    mov     DWORD[ebp-20], eax
+
+    ; store the column of the mouse event in ebp-24
+    push    frmt_delim
+    push    0
+    call    strtok
+    add     esp, 8
+    push    eax
+    call    atoi
+    add     esp, 4
+    mov     DWORD[ebp-24], eax
+
+    ; store the row of the mouse event in ebp-28
+    push    frmt_Mm
+    push    0
+    call    strtok
+    add     esp, 8
+    push    eax
+    call    atoi
+    add     esp, 4
+    mov     DWORD[ebp-28], eax
+
+    ; conditions to not accept mouse input
+    cmp     DWORD[ebp-20], 0
+    jne     topScanLoop
+    xor     DWORD[block_mouse], 1
+    cmp     DWORD[block_mouse], 0
+    je      topScanLoop
+    cmp     DWORD[ebp-28], 20
+    jl      topScanLoop
+    cmp     DWORD[ebp-28], 28
+    jg      topScanLoop
+    cmp     DWORD[ebp-24], 51
+    jg      topScanLoop
+    cmp     DWORD[ebp-24], 1
+    je      topScanLoop
+
+    ; get the location of the mouse click
+    mov     eax, DWORD[ebp-28]
+    sub     eax, 20
+    mov     ebx, 3
+    cdq
+    div     ebx
+    mov     ebx, DWORD[ebp-24]
+    sub     ebx, 2
+
+    ; loads the key map and replaces enter/del chars
+    mov     ecx, DWORD[mouse_array + 4*eax]
+    mov     al, BYTE[ecx + ebx]
+    mov     ebx, 10
+    mov     ecx, 127
+    cmp     al, '1'
+    cmove   eax, ebx
+    cmp     al, '2'
+    cmove   eax, ecx
+    mov     BYTE[userin], al
     endScanLoop:
 
+    ; clears memory
     push    DWORD[ebp-4]
     call    free
     add     esp, 4
