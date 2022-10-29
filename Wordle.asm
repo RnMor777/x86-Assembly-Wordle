@@ -975,6 +975,8 @@ getUserIn:
     ; loads the key map and replaces enter/del chars
     mov     ecx, DWORD[mouse_array + 4*eax]
     mov     al, BYTE[ecx + ebx]
+    cmp     al, " "
+    je      topScanLoop
     mov     ebx, 10
     mov     ecx, 127
     cmp     al, '1'
